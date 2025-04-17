@@ -7,9 +7,15 @@ interface ProcessingIndicatorProps {
   isProcessing: boolean;
   progress: number;
   currentStep: string;
+  totalItems?: { gstr2b: number; purchase: number } | null;
 }
 
-const ProcessingIndicator = ({ isProcessing, progress, currentStep }: ProcessingIndicatorProps) => {
+const ProcessingIndicator = ({ 
+  isProcessing, 
+  progress, 
+  currentStep,
+  totalItems
+}: ProcessingIndicatorProps) => {
   if (!isProcessing) return null;
 
   return (
@@ -24,6 +30,13 @@ const ProcessingIndicator = ({ isProcessing, progress, currentStep }: Processing
         <div className="space-y-2">
           <Progress value={progress} className="h-2" />
           <p className="text-center text-sm text-gray-500">{currentStep}</p>
+          
+          {totalItems && (
+            <div className="text-xs text-gray-500 mt-2 flex justify-center gap-4">
+              <span>GSTR-2B: {totalItems.gstr2b} rows</span>
+              <span>Purchase Register: {totalItems.purchase} rows</span>
+            </div>
+          )}
         </div>
       </CardContent>
     </Card>

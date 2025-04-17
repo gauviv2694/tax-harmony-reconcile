@@ -7,9 +7,14 @@ import ProcessingIndicator from '@/components/ProcessingIndicator';
 import ReconciliationResults from '@/components/ReconciliationResults';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Separator } from '@/components/ui/separator';
 import { useToast } from '@/hooks/use-toast';
 import { ArrowRight, FileSpreadsheet, RefreshCw } from 'lucide-react';
+
+interface ColumnPair {
+  gstr2bKey: string;
+  purchaseKey: string;
+  id: string;
+}
 
 const Index = () => {
   const { toast } = useToast();
@@ -25,15 +30,13 @@ const Index = () => {
   const [purchaseHeaders, setPurchaseHeaders] = useState<string[]>([]);
   
   // Mapping state
-  const [columnMapping, setColumnMapping] = useState<{
-    gstr2bKey: string;
-    purchaseKey: string;
-  } | null>(null);
+  const [columnMappings, setColumnMappings] = useState<ColumnPair[] | null>(null);
   
   // Processing state
   const [isProcessing, setIsProcessing] = useState(false);
   const [processingProgress, setProcessingProgress] = useState(0);
   const [processingStep, setProcessingStep] = useState('');
+  const [totalItems, setTotalItems] = useState<{ gstr2b: number; purchase: number } | null>(null);
   
   // Results state
   const [commonEntries, setCommonEntries] = useState<any[]>([]);
@@ -44,25 +47,27 @@ const Index = () => {
   const handleGstr2bData = (data: any[], headers: string[]) => {
     setGstr2bData(data);
     setGstr2bHeaders(headers);
+    setTotalItems(prev => ({ gstr2b: data.length, purchase: prev?.purchase || 0 }));
   };
   
   const handlePurchaseData = (data: any[], headers: string[]) => {
     setPurchaseData(data);
     setPurchaseHeaders(headers);
+    setTotalItems(prev => ({ gstr2b: prev?.gstr2b || 0, purchase: data.length }));
   };
   
-  const handleColumnMappingComplete = (mapping: {
-    gstr2bKey: string;
-    purchaseKey: string;
-  }) => {
-    setColumnMapping(mapping);
+  const handleColumnMappingComplete = (mappings: ColumnPair[]) => {
+    setColumnMappings(mappings);
+    
+    const mappingDetails = mappings.map(m => `${m.gstr2bKey} ↔ ${m.purchaseKey}`).join(", ");
+    
     toast({
-      title: "Column mapping applied",
-      description: `GSTR-2B: ${mapping.gstr2bKey}, Purchase: ${mapping.purchaseKey}`,
+      title: "Column mappings applied",
+      description: `Applied ${mappings.length} column mappings: ${mappingDetails.length > 50 ? mappingDetails.substring(0, 50) + '...' : mappingDetails}`,
     });
   };
   
-  const canProcess = gstr2bFile && purchaseFile && columnMapping;
+  const canProcess = gstr2bFile && purchaseFile && columnMappings && columnMappings.length > 0;
   
   const resetProcess = () => {
     setGstr2bFile(null);
@@ -71,15 +76,16 @@ const Index = () => {
     setGstr2bHeaders([]);
     setPurchaseData([]);
     setPurchaseHeaders([]);
-    setColumnMapping(null);
+    setColumnMappings(null);
     setShowResults(false);
     setCommonEntries([]);
     setMoreInGstr2b([]);
     setLessInGstr2b([]);
+    setTotalItems(null);
   };
   
   const startProcessing = async () => {
-    if (!canProcess) return;
+    if (!canProcess || !columnMappings) return;
     
     try {
       setIsProcessing(true);
@@ -88,49 +94,85 @@ const Index = () => {
       setProcessingProgress(10);
       
       // Simulate processing delay (would be handled by backend in a real app)
-      await new Promise(r => setTimeout(r, 1000));
-      setProcessingProgress(30);
+      await new Promise(r => setTimeout(r, 800));
+      setProcessingProgress(20);
       
-      // Extract key columns
-      const { gstr2bKey, purchaseKey } = columnMapping;
-      const gstr2bKeyIndex = gstr2bHeaders.indexOf(gstr2bKey);
-      const purchaseKeyIndex = purchaseHeaders.indexOf(purchaseKey);
+      // Extract indices for all mapped columns
+      const mappingIndices = columnMappings.map(mapping => ({
+        gstr2bKeyIndex: gstr2bHeaders.indexOf(mapping.gstr2bKey),
+        purchaseKeyIndex: purchaseHeaders.indexOf(mapping.purchaseKey)
+      }));
       
       setProcessingStep('Extracting key values');
       await new Promise(r => setTimeout(r, 800));
-      setProcessingProgress(50);
+      setProcessingProgress(40);
       
-      // Extract unique key values
-      const gstr2bKeys = gstr2bData
-        .map(row => row[gstr2bKeyIndex])
-        .filter(val => val !== undefined && val !== null && val !== '');
+      // Generate composite keys for comparison
+      const generateCompositeKey = (row: any[], indices: number[]): string => {
+        return indices
+          .map(index => row[index] !== undefined && row[index] !== null ? String(row[index]).trim() : '')
+          .join('|');
+      };
       
-      const purchaseKeys = purchaseData
-        .map(row => row[purchaseKeyIndex])
-        .filter(val => val !== undefined && val !== null && val !== '');
+      const gstr2bKeys = gstr2bData.map(row => {
+        const keyParts = mappingIndices.map(m => row[m.gstr2bKeyIndex]);
+        // Skip rows with any undefined/null key parts
+        if (keyParts.some(part => part === undefined || part === null || part === '')) {
+          return null;
+        }
+        return {
+          key: generateCompositeKey(row, mappingIndices.map(m => m.gstr2bKeyIndex)),
+          data: row
+        };
+      }).filter(item => item !== null) as { key: string; data: any[] }[];
+      
+      const purchaseKeys = purchaseData.map(row => {
+        const keyParts = mappingIndices.map(m => row[m.purchaseKeyIndex]);
+        // Skip rows with any undefined/null key parts
+        if (keyParts.some(part => part === undefined || part === null || part === '')) {
+          return null;
+        }
+        return {
+          key: generateCompositeKey(row, mappingIndices.map(m => m.purchaseKeyIndex)),
+          data: row
+        };
+      }).filter(item => item !== null) as { key: string; data: any[] }[];
       
       setProcessingStep('Finding common entries');
       await new Promise(r => setTimeout(r, 800));
-      setProcessingProgress(70);
+      setProcessingProgress(60);
       
       // Find common entries
-      const common = gstr2bKeys.filter(key => 
-        purchaseKeys.some(pKey => String(pKey) === String(key))
-      );
+      const gstr2bKeySet = new Set(gstr2bKeys.map(item => item.key));
+      const purchaseKeySet = new Set(purchaseKeys.map(item => item.key));
+      
+      const common = gstr2bKeys
+        .filter(item => purchaseKeySet.has(item.key))
+        .map(item => ({
+          key: item.key,
+          gstr2bData: item.data,
+          purchaseData: purchaseKeys.find(pk => pk.key === item.key)?.data
+        }));
       
       // Find more in GSTR2B
-      const more = gstr2bKeys.filter(key => 
-        !purchaseKeys.some(pKey => String(pKey) === String(key))
-      );
+      const more = gstr2bKeys
+        .filter(item => !purchaseKeySet.has(item.key))
+        .map(item => ({
+          key: item.key,
+          data: item.data
+        }));
       
       // Find less in GSTR2B (more in Purchase)
-      const less = purchaseKeys.filter(key => 
-        !gstr2bKeys.some(gKey => String(gKey) === String(key))
-      );
+      const less = purchaseKeys
+        .filter(item => !gstr2bKeySet.has(item.key))
+        .map(item => ({
+          key: item.key,
+          data: item.data
+        }));
       
       setProcessingStep('Generating reconciliation report');
       await new Promise(r => setTimeout(r, 1000));
-      setProcessingProgress(90);
+      setProcessingProgress(80);
       
       // Set results
       setCommonEntries(common);
@@ -167,7 +209,7 @@ const Index = () => {
           GSTR-2B vs Purchase Register Reconciliation
         </h1>
         <p className="text-gray-600 max-w-2xl mx-auto">
-          Upload your GSTR-2B and Purchase Register Excel files, map the matching columns, 
+          Upload your GSTR-2B and Purchase Register Excel files, map matching columns, 
           and generate a detailed reconciliation report.
         </p>
       </div>
@@ -183,7 +225,7 @@ const Index = () => {
             Start New Reconciliation
           </Button>
           
-          {columnMapping && (
+          {columnMappings && (
             <ReconciliationResults
               commonEntries={commonEntries}
               moreInGstr2b={moreInGstr2b}
@@ -192,8 +234,7 @@ const Index = () => {
               purchaseData={purchaseData}
               gstr2bHeaders={gstr2bHeaders}
               purchaseHeaders={purchaseHeaders}
-              gstr2bKey={columnMapping.gstr2bKey}
-              purchaseKey={columnMapping.purchaseKey}
+              columnMappings={columnMappings}
             />
           )}
         </div>
@@ -262,6 +303,12 @@ const Index = () => {
                 </CardTitle>
               </CardHeader>
               <CardContent>
+                <div className="mb-4">
+                  <p className="text-sm text-gray-600">
+                    Select matching columns from GSTR-2B and Purchase Register files. You can add multiple mappings 
+                    for a more precise comparison. At least one mapping is required.
+                  </p>
+                </div>
                 <ColumnMapping
                   gstr2bHeaders={gstr2bHeaders}
                   purchaseHeaders={purchaseHeaders}
@@ -287,6 +334,7 @@ const Index = () => {
                     isProcessing={isProcessing}
                     progress={processingProgress}
                     currentStep={processingStep}
+                    totalItems={totalItems}
                   />
                 ) : (
                   <div className="flex justify-center">
